@@ -23,7 +23,6 @@ If you want to cite GeoSWS_Annotator in a scientific paper or technical report, 
 # Table of Contents
 
 * Features
-* Repository-structure
 * Requirements
 * Installation
 * Quick-usage-cli
