@@ -42,31 +42,6 @@ If you want to cite GeoSWS_Annotator in a scientific paper or technical report, 
 * Export to JSON and RDF/Turtle.
 * Built‑in SQLite cache for SPARQL and external calls.
 
-# Repository Structure
-
-```
-geosws_annotator/
-│ README.md
-│ pyproject.toml
-│ requirements.txt
-│ LICENSE
-│ examples/
-│   config_dbpedia_geonames.json
-│   config_wfs.json
-│   config_rest.json
-│ geosws_annotator/
-│   __init__.py
-│   cli.py
-│   config.py
-│   models.py
-│   utils/
-│   ontology/
-│   annotate/
-│   rest/
-│   wfs/
-│   sparql/
-│   external/
-```
 
 ---
 
