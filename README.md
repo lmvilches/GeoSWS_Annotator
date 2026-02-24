@@ -14,7 +14,7 @@ This reconstruction aims for reproducibility, extensibility, and strong alignmen
 
 Team: Víctor Saquicela | Luis M. Vilches-Blázquez | Oscar Corcho
 
-If you want to cite GeoSWS_Annotator in a scientific paper or technical report, you can use the following articles: 
+# Citation 
 
 * Saquicela, V., Vilches-Blázquez, L. M., & Corcho, O. (2012). Adding semantic annotations into (geospatial) RESTful services. International Journal on Semantic Web and Information Systems (IJSWIS), 8(2), 51–71. https://doi.org/10.4018/jswis.2012040103
 
