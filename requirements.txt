@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geosws-annotator"
+version = "0.1.0"
+description = "Reconstruction of a semantic annotation pipeline for RESTful and OGC WFS services (geospatial)."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name="Reconstructed by ChatGPT"}]
+license = {text = "MIT"}
+dependencies = [
+  "requests>=2.31.0",
+  "lxml>=5.0.0",
+  "rdflib>=7.0.0",
+]
+
+[project.scripts]
+geosws-annotator = "geosws_annotator.cli:main"

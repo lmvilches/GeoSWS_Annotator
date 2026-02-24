@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Iterable, Set, Optional
+
+from ..utils.text import normalize_term
+
+
+@dataclass(frozen=True)
+class SpecialDetectionResult:
+    special_type: Optional[str]  # navigation|unknown|geospatial|None
+    reason: str
+
+
+class SpecialParameterDetector:
+    """Implements the thesis' idea of filtering out 'special parameters'.
+
+    - navigation parameters (paging, counts, links...)
+    - unknown parameters (1-letter parameters: q, l, s...)
+    - geospatial parameters (lat/lng/bbox...)
+    """
+
+    DEFAULT_NAVIGATION: Set[str] = {
+        # Examples mentioned in thesis: link, userID, hits, total, pages...
+        "link", "userid", "user id", "hits", "total", "pages", "page", "page size",
+        "limit", "offset", "start", "next", "prev", "previous", "cursor", "per page",
+        "count", "maxresults", "format", "apikey", "api key", "key",
+    }
+
+    DEFAULT_GEOSPATIAL: Set[str] = {
+        "lat", "latitude", "lng", "lon", "long", "longitude",
+        "bbox", "bounding box", "north", "south", "east", "west",
+        "x", "y", "srid", "epsg",
+    }
+
+    def __init__(self, navigation_terms: Iterable[str] | None = None, geospatial_terms: Iterable[str] | None = None):
+        self.navigation = {normalize_term(x) for x in (navigation_terms or self.DEFAULT_NAVIGATION)}
+        self.geospatial = {normalize_term(x) for x in (geospatial_terms or self.DEFAULT_GEOSPATIAL)}
+
+    def detect(self, param_name: str) -> SpecialDetectionResult:
+        n = normalize_term(param_name)
+        if not n:
+            return SpecialDetectionResult("unknown", "empty after normalization")
+        if len(n.replace(" ", "")) <= 1:
+            return SpecialDetectionResult("unknown", "single-character parameter")
+        if n in self.navigation:
+            return SpecialDetectionResult("navigation", f"matches navigation term '{n}'")
+        if n in self.geospatial:
+            return SpecialDetectionResult("geospatial", f"matches geospatial term '{n}'")
+        return SpecialDetectionResult(None, "not special")

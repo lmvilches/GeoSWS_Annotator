@@ -1,0 +1,64 @@
+# GeoSWS Annotator (reconstrucción de código)
+
+Este repositorio **reconstruye** (de forma aproximada) un sistema de *anotación semántica* para:
+- **Servicios RESTful** (Web APIs) en dominio geoespacial
+- **Servicios OGC WFS** (Web Feature Service)
+
+Está inspirado en el proceso descrito en la tesis doctoral *Semantic Annotation of RESTful and WFS OGC services* (2015).
+
+## Qué implementa (mapeo con el “pipeline” de la tesis)
+
+El proyecto implementa un pipeline modular que cubre:
+
+- **Detección de parámetros especiales** (navegación, desconocidos, geoespaciales)
+- **Matching de parámetros ↔ ontologías** con:
+  - *exact match*
+  - similitud (Jaro, Jaro-Winkler, Levenshtein)
+- **Enriquecimiento** de parámetros con *suggestions* y *synonyms* (pluggable providers)
+- **Recuperación de instancias** desde endpoints SPARQL (DBpedia/GeoNames u otros)
+- **Validación por invocación** (especialmente clara en WFS con GetFeature + filtros)
+- **Exportación** de anotaciones a JSON y (opcional) RDF/Turtle si `rdflib` está instalado.
+
+> Nota: sin el código original, esta implementación prioriza ser **práctica y extensible**.
+> Puede que no replique cada detalle exacto del prototipo del autor.
+
+## Instalación
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+## Uso rápido
+
+### 1) Construir un índice local de ontologías (recomendado)
+Para evitar consultas SPARQL constantes, puedes crear un índice local (labels de clases/propiedades):
+
+```bash
+python -m geosws_annotator.cli build-ontology-index --config examples/config_dbpedia_geonames.json --out data/ontology_index.json
+```
+
+### 2) Anotar un WFS
+```bash
+python -m geosws_annotator.cli annotate-wfs --config examples/config_wfs.json --out out_wfs/
+```
+
+### 3) Anotar una lista de REST endpoints
+```bash
+python -m geosws_annotator.cli annotate-rest --config examples/config_rest.json --out out_rest/
+```
+
+## Configuración
+Mira `examples/` para plantillas de configuración:
+
+- `examples/config_dbpedia_geonames.json`: endpoints SPARQL y límites
+- `examples/config_wfs.json`: URL(s) base de WFS + parámetros de ejecución
+- `examples/config_rest.json`: endpoints REST + hints opcionales
+
+## Limitaciones conocidas (realistas)
+- La introspección de REST “en la Web” sin OpenAPI/Swagger es difícil; aquí se hace de forma heurística.
+- Los proveedores de *suggestions/synonyms* dependen de servicios externos (pueden cambiar).
+- DBpedia/GeoNames pueden aplicar rate limiting: usa el cache SQLite.
+
+## Licencia
+MIT (para este código reconstruido).

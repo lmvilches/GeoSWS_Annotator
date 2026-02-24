@@ -1,0 +1,169 @@
+from __future__ import annotations
+
+import os
+import random
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+from ..config import PipelineConfig
+from ..models import Service, Parameter, OntologyResource
+from ..utils.cache import SqliteCache
+from ..annotate.special import SpecialParameterDetector
+from ..external.providers import build_provider
+from ..external.enrich import Enricher
+from ..ontology.index import OntologyIndex
+from ..ontology.matcher import OntologyMatcher
+from ..sparql.client import SparqlClient, sparql_instances_of_class, sparql_instances_of_property
+
+import requests
+
+
+@dataclass
+class AnnotationOutput:
+    service: Service
+    exported: Dict[str, str]  # kind -> path
+
+
+class AnnotationPipeline:
+    def __init__(self, cfg: PipelineConfig):
+        self.cfg = cfg
+        os.makedirs(os.path.dirname(cfg.cache_sqlite_path) or ".", exist_ok=True)
+        self.cache = SqliteCache(cfg.cache_sqlite_path)
+        self.special_detector = SpecialParameterDetector()
+
+        # external resources
+        sugg = None
+        syn = None
+        if cfg.external_resources.enable_suggestions:
+            sugg = build_provider(cfg.external_resources.suggestion_provider, cfg.external_resources.provider_settings.get(cfg.external_resources.suggestion_provider, {}))
+        if cfg.external_resources.enable_synonyms:
+            syn = build_provider(cfg.external_resources.synonym_provider, cfg.external_resources.provider_settings.get(cfg.external_resources.synonym_provider, {}))
+        self.enricher = Enricher(sugg=sugg, syn=syn, cache=self.cache)
+
+        # SPARQL clients
+        self.sparql_clients = [
+            SparqlClient(e.url, cache=self.cache, timeout_s=e.timeout_s, user_agent=e.user_agent)
+            for e in cfg.sparql_endpoints
+        ]
+
+        # Ontology matcher
+        if cfg.ontology_index.index_path:
+            self.ontology_index = OntologyIndex.from_json(cfg.ontology_index.index_path)
+        else:
+            # No local index supplied. We'll build a small index from the first endpoint.
+            # For large runs you should call build-ontology-index separately.
+            self.ontology_index = OntologyIndex.build_from_sparql(
+                client=self.sparql_clients[0],
+                languages=cfg.ontology_index.languages,
+                limit=cfg.ontology_index.limit_per_type,
+            )
+        self.matcher = OntologyMatcher(self.ontology_index)
+
+    def _retrieve_instances(self, uri: str, typ: int, limit: int) -> List[str]:
+        # typ: 0 class, 1 property
+        q = sparql_instances_of_class(uri, limit=limit) if typ == 0 else sparql_instances_of_property(uri, limit=limit)
+        # try endpoints in order; first successful with bindings
+        for client in self.sparql_clients:
+            try:
+                data = client.query("""PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n""" + q)
+                vals = SparqlClient.bindings_to_values(data, "val")
+                if vals:
+                    return vals
+            except Exception:
+                continue
+        return []
+
+    def annotate_parameters(self, params: List[Parameter]) -> None:
+        # Step 5: detect special parameters
+        for p in params:
+            det = self.special_detector.detect(p.name)
+            p.special_type = det.special_type
+
+        # Step 6: match to ontology concepts (skip special)
+        for p in params:
+            if p.special_type is not None:
+                continue
+
+            matches = self.matcher.match(
+                p.name,
+                exact_match=self.cfg.matching.exact_match,
+                use_similarity=self.cfg.matching.use_similarity,
+                jaro_threshold=self.cfg.matching.jaro_threshold,
+                jaro_winkler_threshold=self.cfg.matching.jaro_winkler_threshold,
+                levenshtein_ratio_threshold=self.cfg.matching.levenshtein_ratio_threshold,
+                top_k=self.cfg.matching.top_k,
+            )
+            for m in matches:
+                r = OntologyResource(uri=m.element.uri, label=m.element.label or m.element.uri, type=m.element.type)
+                instances = self._retrieve_instances(r.uri, r.type, limit=self.cfg.instances_limit)
+                for v in instances:
+                    r.add_instance(v)
+                p.ontology_candidates.append(r)
+
+        # Step 7: enrich with external resources for parameters with no candidates (skip special)
+        for p in params:
+            if p.special_type is not None:
+                continue
+            if p.ontology_candidates:
+                continue
+            enrich = self.enricher.enrich(p.name)
+            p.suggestions = enrich.suggestions
+            p.synonyms = enrich.synonyms
+
+        # Step 8: match enriched terms as new candidates (skip special)
+        for p in params:
+            if p.special_type is not None:
+                continue
+            if p.ontology_candidates:
+                continue
+            for t in (p.suggestions + p.synonyms):
+                matches = self.matcher.match(
+                    t,
+                    exact_match=self.cfg.matching.exact_match,
+                    use_similarity=self.cfg.matching.use_similarity,
+                    jaro_threshold=self.cfg.matching.jaro_threshold,
+                    jaro_winkler_threshold=self.cfg.matching.jaro_winkler_threshold,
+                    levenshtein_ratio_threshold=self.cfg.matching.levenshtein_ratio_threshold,
+                    top_k=self.cfg.matching.top_k,
+                )
+                for m in matches:
+                    r = OntologyResource(uri=m.element.uri, label=m.element.label or m.element.uri, type=m.element.type)
+                    instances = self._retrieve_instances(r.uri, r.type, limit=self.cfg.instances_limit)
+                    for v in instances:
+                        r.add_instance(v)
+                    p.ontology_candidates.append(r)
+
+    def validate_rest_inputs(self, service_url: str, input_params: List[Parameter]) -> None:
+        """Step 9 style validation for REST inputs: try calling with candidate instances."""
+        # Very heuristic: try each param with a few instance values
+        for p in input_params:
+            if p.special_type is not None:
+                continue
+            vals: List[str] = []
+            for cand in p.ontology_candidates[:2]:
+                vals.extend([inst.value for inst in cand.instances[:5]])
+            random.shuffle(vals)
+            vals = vals[: self.cfg.validation_trials]
+
+            ok = False
+            for v in vals:
+                try:
+                    resp = requests.get(service_url, params={p.name: v}, timeout=self.cfg.http_timeout_s)
+                    if resp.status_code < 400 and resp.text:
+                        ok = True
+                        break
+                except Exception:
+                    continue
+            p.validated = ok
+
+    def validate_wfs_by_getfeature(self, getfeature_url: str, property_name: str, candidate_values: List[str]) -> bool:
+        # Use OGC Filter (PropertyIsEqualTo). We keep it minimal and URL-encode via requests.
+        filter_xml = f"""<Filter><PropertyIsEqualTo><PropertyName>{property_name}</PropertyName><Literal>{{}}</Literal></PropertyIsEqualTo></Filter>"""
+        for v in candidate_values[: self.cfg.validation_trials]:
+            try:
+                resp = requests.get(getfeature_url, params={"FILTER": filter_xml.format(v)}, timeout=self.cfg.http_timeout_s)
+                if resp.status_code < 400 and resp.text and "FeatureCollection" in resp.text:
+                    return True
+            except Exception:
+                continue
+        return False
